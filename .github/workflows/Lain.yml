@@ -1,0 +1,51 @@
+name: Free RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360   # حدود 6 ساعت
+
+    steps:
+    - name: Download Ngrok
+      run: |
+        Invoke-WebRequest https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
+        Expand-Archive ngrok.zip -DestinationPath ngrok
+
+    - name: Authenticate Ngrok
+      run: .\ngrok\ngrok.exe authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+
+    - name: Enable Remote Desktop
+      run: |
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+
+    - name: Create RDP User
+      run: |
+        $PasswordPlain = "${{ secrets.RDP_PASSWORD }}"
+        $Password = ConvertTo-SecureString $PasswordPlain -AsPlainText -Force
+        if (-not (Get-LocalUser -Name "rdpuser" -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name "rdpuser" -Password $Password -AccountNeverExpires
+            Add-LocalGroupMember -Group "Administrators" -Member "rdpuser"
+        }
+
+    - name: Start Ngrok Tunnel
+      run: |
+        Start-Process -FilePath .\ngrok\ngrok.exe -ArgumentList "tcp 3389" -WindowStyle Hidden
+        Start-Sleep -Seconds 15
+        $ngrokInfo = Invoke-RestMethod http://127.0.0.1:4040/api/tunnels
+        $tcpUrl = $ngrokInfo.tunnels[0].public_url
+        echo "NGROK_TCP_URL=$tcpUrl" >> $env:GITHUB_ENV
+
+    - name: Show RDP Info
+      run: |
+        Write-Host "===================="
+        Write-Host "RDP Address: $env:NGROK_TCP_URL"
+        Write-Host "Username: rdpuser"
+        Write-Host "Password: ${{ secrets.RDP_PASSWORD }}"
+        Write-Host "===================="
+        Write-Host "Use the above info in your RDP client."
+        # Keep VM alive
+        while ($true) { Start-Sleep -Seconds 300 }
